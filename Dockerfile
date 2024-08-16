@@ -1,6 +1,6 @@
 FROM node:21 as NODE_BUILD
-WORKDIR /go/src/github.com/siyuan-note/siyuan/
-ADD . /go/src/github.com/siyuan-note/siyuan/
+WORKDIR /go/src/github.com/siyuan-community/siyuan/
+ADD . /go/src/github.com/siyuan-community/siyuan/
 RUN apt-get update && \
     apt-get install -y jq
 RUN cd app && \
