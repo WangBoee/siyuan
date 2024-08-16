@@ -37,6 +37,7 @@ var (
 	TLSCertFile = ""
 	TLSKeyFile  = ""
 	Protocol    = "http"
+	Hostname    = "localhost"
 	UserAgent   = "SiYuan/" + Ver
 )
 
@@ -273,6 +274,7 @@ func IsDisplayableAsset(p string) bool {
 
 func GetAbsPathInWorkspace(relPath string) (string, error) {
 	absPath := filepath.Join(WorkspaceDir, relPath)
+	absPath = filepath.Clean(absPath)
 	if WorkspaceDir == absPath {
 		return absPath, nil
 	}

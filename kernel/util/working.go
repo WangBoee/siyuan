@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"mime"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,7 +43,7 @@ import (
 var Mode = "prod"
 
 const (
-	Ver       = "3.0.15"
+	Ver       = "3.1.3"
 	IsInsider = false
 )
 
@@ -80,9 +81,11 @@ func Boot() {
 	lang := flag.String("lang", "", "zh_CN/zh_CHT/en_US/fr_FR/es_ES/ja_JP")
 	mode := flag.String("mode", "prod", "dev/prod")
 
-	tlsKernel := flag.Bool("tls-kernel", false, "enable SSL/TLS for kernel service")
-	tlsCertFile := flag.String("tls-cert-file", "", "SSL/TLS fullchain certificate file path, default to workspace/conf/tls/siyuan.pem.cer")
-	tlsKeyFile := flag.String("tls-key-file", "", "SSL/TLS private key file path, default to workspace/conf/tls/siyuan.pem.key")
+	hostname := flag.String("hostname", "localhost", "Hostname used for the reverse proxy (publishing services, etc), default to \"localhost\"")
+
+	tlsKernel := flag.Bool("tls-kernel", false, "enable SSL/TLS for kernel service, default to false")
+	tlsCertFile := flag.String("tls-cert-file", "", "SSL/TLS full-chain certificate file path, default to \"workspace/conf/tls/siyuan.pem.cer\"")
+	tlsKeyFile := flag.String("tls-key-file", "", "SSL/TLS private key file path, default to \"workspace/conf/tls/siyuan.pem.key\"")
 
 	flag.Parse()
 
@@ -129,6 +132,8 @@ func Boot() {
 
 	SSL = *ssl
 
+	Hostname = *hostname
+
 	TLSKernel = *tlsKernel
 	TLSCertFile = *tlsCertFile
 	TLSKeyFile = *tlsKeyFile
@@ -141,7 +146,7 @@ func Boot() {
 			TLSKeyFile = filepath.Join(ConfDir, "tls", "siyuan.pem.key")
 		}
 		if _, err := tls.LoadX509KeyPair(TLSCertFile, TLSKeyFile); nil != err {
-			logging.LogWarnf("load SSL/TLS certificate file failed: %s", err)
+			logging.LogErrorf("load SSL/TLS certificate file failed: %s", err)
 			TLSKernel = false
 		} else {
 			SSL = true
@@ -232,7 +237,7 @@ var (
 	DBPath             string        // SQLite 数据库文件路径
 	HistoryDBPath      string        // SQLite 历史数据库文件路径
 	AssetContentDBPath string        // SQLite 资源文件内容数据库文件路径
-	BlockTreePath      string        // 区块树文件路径
+	BlockTreeDBPath    string        // 区块树数据库文件路径
 	AppearancePath     string        // 配置目录下的外观目录 appearance/ 路径
 	ThemesPath         string        // 配置目录下的外观目录下的 themes/ 路径
 	IconsPath          string        // 配置目录下的外观目录下的 icons/ 路径
@@ -310,7 +315,7 @@ func initWorkspaceDir(workspaceArg string) {
 	DBPath = filepath.Join(TempDir, DBName)
 	HistoryDBPath = filepath.Join(TempDir, "history.db")
 	AssetContentDBPath = filepath.Join(TempDir, "asset_content.db")
-	BlockTreePath = filepath.Join(TempDir, "blocktree")
+	BlockTreeDBPath = filepath.Join(TempDir, "blocktree.db")
 	SnippetsPath = filepath.Join(DataDir, "snippets")
 }
 
@@ -365,7 +370,9 @@ func WriteWorkspacePaths(workspacePaths []string) (err error) {
 }
 
 var (
-	ServerPort     = "0" // HTTP/WebSocket 端口，0 为使用随机端口
+	ServerURL  *url.URL // 内核服务 URL
+	ServerPort = "0"    // HTTP/WebSocket 端口，0 为使用随机端口
+
 	ReadOnly       bool
 	AccessAuthCode string
 	Lang           = ""

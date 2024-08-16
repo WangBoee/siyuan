@@ -271,6 +271,29 @@ func RollbackDocHistory(boxID, historyPath string) (err error) {
 
 	FullReindex()
 	IncSync()
+	go func() {
+		sql.WaitForWritingDatabase()
+
+		tree, _ = LoadTreeByBlockID(id)
+		if nil == tree {
+			return
+		}
+
+		// 刷新关联的动态锚文本 https://github.com/siyuan-note/siyuan/issues/11575
+		refreshDynamicRefText(tree.Root, tree)
+
+		// 刷新页签名
+		refText := getNodeRefText(tree.Root)
+		evt := util.NewCmdResult("rename", 0, util.PushModeBroadcast)
+		evt.Data = map[string]interface{}{
+			"box":     boxID,
+			"id":      tree.Root.ID,
+			"path":    tree.Path,
+			"title":   tree.Root.IALAttr("title"),
+			"refText": refText,
+		}
+		util.PushEvent(evt)
+	}()
 	return nil
 }
 
@@ -423,7 +446,7 @@ func buildSearchHistoryQueryFilter(query, op, box, table string, typ int) (stmt 
 	}
 
 	ago := time.Now().Add(-24 * time.Hour * time.Duration(Conf.Editor.HistoryRetentionDays))
-	stmt += " AND created > '" + fmt.Sprintf("%d", ago.Unix()) + "'"
+	stmt += " AND CAST(created AS INTEGER) > " + fmt.Sprintf("%d", ago.Unix()) + ""
 	return
 }
 
@@ -596,7 +619,7 @@ func clearOutdatedHistoryDir(historyDir string) {
 	}
 
 	// 清理历史库
-	sql.DeleteOutdatedHistories(fmt.Sprintf("%d", ago))
+	sql.DeleteOutdatedHistories(ago)
 }
 
 var boxLatestHistoryTime = map[string]time.Time{}

@@ -1,19 +1,19 @@
-# # echo 'pwsh -f ./scripts/build.ps1'
+echo 'pwsh -f ./scripts/build.ps1'
 
-# echo 'Building UI'
+echo 'Building UI'
 
-# # nvm on
-# # nvm use 20
+# nvm on
+# nvm use 20
 
-# cd app
+cd app
 
-# $ENV:COREPACK_ENABLE_STRICT = '0'
-# $ENV:ELECTRON_MIRROR = 'https://cnpmjs.org/mirrors/electron/'
+$ENV:COREPACK_ENABLE_STRICT = '0'
+$ENV:ELECTRON_MIRROR = 'https://cnpmjs.org/mirrors/electron/'
 
-# pnpm install
-# pnpm run build
+pnpm install
+pnpm run build
 
-# cd ..
+cd ..
 
 ## ----------------------------------------------------------------
 
@@ -30,14 +30,15 @@ cd kernel
 go version
 
 $ENV:GO111MODULE = 'on'
-$ENV:GOPROXY = 'https://goproxy.io'
 $ENV:CGO_ENABLED = '1'
 
-$ENV:GOOS = 'windows'
-$ENV:GOARCH = 'amd64'
+# $ENV:GOPROXY = 'https://goproxy.io'
 
 go generate
 goversioninfo -platform-specific=true -icon=resource/icon.ico -manifest=resource/goversioninfo.exe.manifest
+
+$ENV:GOOS = 'windows'
+$ENV:GOARCH = 'amd64'
 
 go mod tidy
 go build --tags fts5 -v -o "../app/kernel/SiYuan-Kernel.exe" -ldflags "-s -w -H=windowsgui" .

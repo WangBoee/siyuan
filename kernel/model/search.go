@@ -311,7 +311,7 @@ func buildEmbedBlock(embedBlockID string, excludeIDs []string, headingMode int, 
 	return
 }
 
-func SearchRefBlock(id, rootID, keyword string, beforeLen int, isSquareBrackets bool) (ret []*Block, newDoc bool) {
+func SearchRefBlock(id, rootID, keyword string, beforeLen int, isSquareBrackets, isDatabase bool) (ret []*Block, newDoc bool) {
 	cachedTrees := map[string]*parse.Tree{}
 
 	onlyDoc := false
@@ -321,11 +321,20 @@ func SearchRefBlock(id, rootID, keyword string, beforeLen int, isSquareBrackets 
 
 	if "" == keyword {
 		// 查询为空时默认的块引排序规则按最近使用优先 https://github.com/siyuan-note/siyuan/issues/3218
-		refs := sql.QueryRefsRecent(onlyDoc)
+
+		typeFilter := Conf.Search.TypeFilter()
+		ignoreLines := getRefSearchIgnoreLines()
+		refs := sql.QueryRefsRecent(onlyDoc, typeFilter, ignoreLines)
+		var btsID []string
+		for _, ref := range refs {
+			btsID = append(btsID, ref.DefBlockRootID)
+		}
+		btsID = gulu.Str.RemoveDuplicatedElem(btsID)
+		bts := treenode.GetBlockTrees(btsID)
 		for _, ref := range refs {
 			tree := cachedTrees[ref.DefBlockRootID]
 			if nil == tree {
-				tree, _ = LoadTreeByBlockID(ref.DefBlockRootID)
+				tree, _ = loadTreeByBlockTree(bts[ref.DefBlockRootID])
 			}
 			if nil == tree {
 				continue
@@ -358,10 +367,16 @@ func SearchRefBlock(id, rootID, keyword string, beforeLen int, isSquareBrackets 
 
 	ret = fullTextSearchRefBlock(keyword, beforeLen, onlyDoc)
 	tmp := ret[:0]
+	var btsID []string
+	for _, b := range ret {
+		btsID = append(btsID, b.RootID)
+	}
+	btsID = gulu.Str.RemoveDuplicatedElem(btsID)
+	bts := treenode.GetBlockTrees(btsID)
 	for _, b := range ret {
 		tree := cachedTrees[b.RootID]
 		if nil == tree {
-			tree, _ = LoadTreeByBlockID(b.RootID)
+			tree, _ = loadTreeByBlockTree(bts[b.RootID])
 		}
 		if nil == tree {
 			continue
@@ -374,7 +389,7 @@ func SearchRefBlock(id, rootID, keyword string, beforeLen int, isSquareBrackets 
 			// `((` 引用候选中排除当前块的父块 https://github.com/siyuan-note/siyuan/issues/4538
 			tree := cachedTrees[b.RootID]
 			if nil == tree {
-				tree, _ = LoadTreeByBlockID(b.RootID)
+				tree, _ = loadTreeByBlockTree(bts[b.RootID])
 				cachedTrees[b.RootID] = tree
 			}
 			if nil != tree {
@@ -398,9 +413,14 @@ func SearchRefBlock(id, rootID, keyword string, beforeLen int, isSquareBrackets 
 	}
 	ret = tmp
 
-	if block := treenode.GetBlockTree(id); nil != block {
-		p := path.Join(block.HPath, keyword)
-		newDoc = nil == treenode.GetBlockTreeRootByHPath(block.BoxID, p)
+	if !isDatabase {
+		// 如果非数据库中搜索块引，则不允许新建重名文档
+		if block := treenode.GetBlockTree(id); nil != block {
+			p := path.Join(block.HPath, keyword)
+			newDoc = nil == treenode.GetBlockTreeRootByHPath(block.BoxID, p)
+		}
+	} else { // 如果是数据库中搜索绑定块，则允许新建重名文档 https://github.com/siyuan-note/siyuan/issues/11713
+		newDoc = true
 	}
 
 	// 在 hPath 中加入笔记本名 Show notebooks in hpath of block ref search list results https://github.com/siyuan-note/siyuan/issues/9378
@@ -728,6 +748,22 @@ func FindReplace(keyword, replacement string, replaceTypes map[string]bool, ids 
 						}
 
 						replaceNodeTextMarkTextContent(n, method, keyword, replacement, r, "text")
+					} else if n.IsTextMarkType("block-ref") {
+						if !replaceTypes["blockRef"] {
+							return ast.WalkContinue
+						}
+
+						if 0 == method {
+							if strings.Contains(n.TextMarkTextContent, keyword) {
+								n.TextMarkTextContent = strings.ReplaceAll(n.TextMarkTextContent, keyword, replacement)
+								n.TextMarkBlockRefSubtype = "s"
+							}
+						} else if 3 == method {
+							if nil != r && r.MatchString(n.TextMarkTextContent) {
+								n.TextMarkTextContent = r.ReplaceAllString(n.TextMarkTextContent, replacement)
+								n.TextMarkBlockRefSubtype = "s"
+							}
+						}
 					}
 				}
 				return ast.WalkContinue
@@ -853,7 +889,7 @@ func FullTextSearchBlock(query string, boxes, paths []string, types map[string]b
 
 	beforeLen := 36
 	var blocks []*Block
-	orderByClause := buildOrderBy(method, orderBy)
+	orderByClause := buildOrderBy(query, method, orderBy)
 	switch method {
 	case 1: // 查询语法
 		filter := buildTypeFilter(types)
@@ -882,11 +918,17 @@ func FullTextSearchBlock(query string, boxes, paths []string, types map[string]b
 		rootMap := map[string]bool{}
 		var rootIDs []string
 		contentSorts := map[string]int{}
+		var btsID []string
+		for _, b := range blocks {
+			btsID = append(btsID, b.RootID)
+		}
+		btsID = gulu.Str.RemoveDuplicatedElem(btsID)
+		bts := treenode.GetBlockTrees(btsID)
 		for _, b := range blocks {
 			if _, ok := rootMap[b.RootID]; !ok {
 				rootMap[b.RootID] = true
 				rootIDs = append(rootIDs, b.RootID)
-				tree, _ := LoadTreeByBlockID(b.RootID)
+				tree, _ := loadTreeByBlockTree(bts[b.RootID])
 				if nil == tree {
 					continue
 				}
@@ -992,7 +1034,7 @@ func buildPathsFilter(paths []string) string {
 	return builder.String()
 }
 
-func buildOrderBy(method, orderBy int) string {
+func buildOrderBy(query string, method, orderBy int) string {
 	switch orderBy {
 	case 1:
 		return "ORDER BY created ASC"
@@ -1014,7 +1056,14 @@ func buildOrderBy(method, orderBy int) string {
 		}
 		return "ORDER BY rank" // 默认是按相关度降序
 	default:
-		return "ORDER BY sort ASC, updated DESC" // Improve search default sort https://github.com/siyuan-note/siyuan/issues/8624
+		clause := "ORDER BY CASE " +
+			"WHEN name = '${keyword}' THEN 10 " +
+			"WHEN alias = '${keyword}' THEN 20 " +
+			"WHEN name LIKE '%${keyword}%' THEN 50 " +
+			"WHEN alias LIKE '%${keyword}%' THEN 60 " +
+			"ELSE 65535 END ASC, sort ASC, updated DESC"
+		clause = strings.ReplaceAll(clause, "${keyword}", strings.ReplaceAll(query, "'", "''"))
+		return clause
 	}
 }
 
@@ -1138,29 +1187,29 @@ func fullTextSearchRefBlock(keyword string, beforeLen int, onlyDoc bool) (ret []
 
 	if ignoreLines := getRefSearchIgnoreLines(); 0 < len(ignoreLines) {
 		// Support ignore search results https://github.com/siyuan-note/siyuan/issues/10089
-		notLike := bytes.Buffer{}
+		buf := bytes.Buffer{}
 		for _, line := range ignoreLines {
-			notLike.WriteString(" AND ")
-			notLike.WriteString(line)
+			buf.WriteString(" AND ")
+			buf.WriteString(line)
 		}
-		stmt += notLike.String()
+		stmt += buf.String()
 	}
 
-	orderBy := ` order by case
-             when name = '${keyword}' then 10
-             when alias = '${keyword}' then 20
-             when memo = '${keyword}' then 30
-             when content = '${keyword}' and type = 'd' then 40
-             when content LIKE '%${keyword}%' and type = 'd' then 41
-             when name LIKE '%${keyword}%' then 50
-             when alias LIKE '%${keyword}%' then 60
-             when content = '${keyword}' and type = 'h' then 70
-             when content LIKE '%${keyword}%' and type = 'h' then 71
-             when fcontent = '${keyword}' and type = 'i' then 80
-             when fcontent LIKE '%${keyword}%' and type = 'i' then 81
-             when memo LIKE '%${keyword}%' then 90
-             when content LIKE '%${keyword}%' and type != 'i' and type != 'l' then 100
-             else 65535 end ASC, sort ASC, length ASC`
+	orderBy := ` ORDER BY CASE
+             WHEN name = '${keyword}' THEN 10
+             WHEN alias = '${keyword}' THEN 20
+             WHEN memo = '${keyword}' THEN 30
+             WHEN content = '${keyword}' and type = 'd' THEN 40
+             WHEN content LIKE '%${keyword}%' and type = 'd' THEN 41
+             WHEN name LIKE '%${keyword}%' THEN 50
+             WHEN alias LIKE '%${keyword}%' THEN 60
+             WHEN content = '${keyword}' and type = 'h' THEN 70
+             WHEN content LIKE '%${keyword}%' and type = 'h' THEN 71
+             WHEN fcontent = '${keyword}' and type = 'i' THEN 80
+             WHEN fcontent LIKE '%${keyword}%' and type = 'i' THEN 81
+             WHEN memo LIKE '%${keyword}%' THEN 90
+             WHEN content LIKE '%${keyword}%' and type != 'i' and type != 'l' THEN 100
+             ELSE 65535 END ASC, sort ASC, length ASC`
 	orderBy = strings.ReplaceAll(orderBy, "${keyword}", strings.ReplaceAll(keyword, "'", "''"))
 	stmt += orderBy + " LIMIT " + strconv.Itoa(Conf.Search.Limit)
 	blocks := sql.SelectBlocksRawStmtNoParse(stmt, Conf.Search.Limit)
@@ -1258,12 +1307,12 @@ func fullTextSearchByFTS(query, boxFilter, pathFilter, typeFilter, orderBy strin
 
 	if ignoreLines := getSearchIgnoreLines(); 0 < len(ignoreLines) {
 		// Support ignore search results https://github.com/siyuan-note/siyuan/issues/10089
-		notLike := bytes.Buffer{}
+		buf := bytes.Buffer{}
 		for _, line := range ignoreLines {
-			notLike.WriteString(" AND ")
-			notLike.WriteString(line)
+			buf.WriteString(" AND ")
+			buf.WriteString(line)
 		}
-		stmt += notLike.String()
+		stmt += buf.String()
 	}
 
 	stmt += " " + orderBy
